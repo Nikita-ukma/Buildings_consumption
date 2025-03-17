@@ -2,94 +2,127 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
+from sklearn.preprocessing import MinMaxScaler
 
-# === 1. Завантаження даних ===
-print("🔹 Завантаження даних...")
-df = pd.read_csv("data/power-laws-forecasting-energy-consumption-training-data.csv", sep=';', parse_dates=["Timestamp"])
-metadata = pd.read_csv("data/power-laws-forecasting-energy-consumption-metadata.csv", sep=';')
-weather = pd.read_csv("data/power-laws-forecasting-energy-consumption-weather.csv", sep=';', parse_dates=["Timestamp"])
-holidays = pd.read_csv("data/power-laws-forecasting-energy-consumption-holidays.csv", sep=';', parse_dates=["Date"])
+# Завантаження тренувальних даних
+energy_data_train = pd.read_csv('data/monthly_consumption.csv', sep=',')
+building_data = pd.read_csv('data/power-laws-forecasting-energy-consumption-metadata.csv', sep=';')
+temperature_data = pd.read_csv('data/monthly_weather.csv', sep=',')
+holidays_data = pd.read_csv('data/monthly_holidays.csv', sep=',')
 
-# === 2. Часові фічі ===
-df["Hour"] = df["Timestamp"].dt.hour
-df["DayOfWeek"] = df["Timestamp"].dt.dayofweek  # (0 - понеділок, 6 - неділя)
-df["Month"] = df["Timestamp"].dt.month
-df["Year"] = df["Timestamp"].dt.year
-df["Date"] = df["Timestamp"].dt.date  # Для об'єднання зі святами
+# Об'єднання тренувальних даних
+data_train = pd.merge(energy_data_train, building_data, on='SiteId')
+data_train = pd.merge(data_train, temperature_data, on=['SiteId', 'Month'])
+data_train = pd.merge(data_train, holidays_data, on=['SiteId', 'Month'])
 
-# Додаткові фічі
-df["IsWeekend"] = df["DayOfWeek"].apply(lambda x: 1 if x >= 5 else 0)  # Вихідний день
+# Перетворення Timestamp у datetime
+data_train['Timestamp'] = pd.to_datetime(data_train['Month'])
+data_train['Month'] = data_train['Timestamp'].dt.month
+data_train['Year'] = data_train['Timestamp'].dt.year
 
-# === 3. Додавання мета-даних про будівлі ===
-df = df.merge(metadata, on="SiteId", how="left")
+# Додавання нових ознак
+data_train['value_lag1'] = data_train.groupby('SiteId')['value'].shift(1)
+data_train['value_lag2'] = data_train.groupby('SiteId')['value'].shift(2)
+data_train['value_lag3'] = data_train.groupby('SiteId')['value'].shift(3)
+data_train['value_rolling_mean'] = data_train.groupby('SiteId')['value'].rolling(window=3).mean().reset_index(level=0, drop=True)
 
-# === 4. Об'єднання з погодними даними ===
-weather = weather.sort_values(["SiteId", "Timestamp", "Distance"]).drop_duplicates(["SiteId", "Timestamp"])
-df = df.merge(weather, on=["SiteId", "Timestamp"], how="left")
+# Видалення пропущених значень
+data_train.dropna(inplace=True)
 
-# === 5. Додавання інформації про свята ===
-holidays["HolidayFlag"] = 1
+# Масштабування даних
+scaler = MinMaxScaler()
+numerical_features = data_train.select_dtypes(include=['float64', 'int64']).columns
+data_train[numerical_features] = scaler.fit_transform(data_train[numerical_features])
 
-# Перетворення типів даних для об'єднання
-df["Date"] = pd.to_datetime(df["Date"])
-holidays["Date"] = pd.to_datetime(holidays["Date"])
+# Підготовка тренувальних даних
+X_train = data_train.drop(columns=["value"])
+y_train = data_train["value"]
+X_train = X_train.select_dtypes(include=['float64', 'int64'])
 
-# Додавання свята
-df = df.merge(holidays[["Date", "SiteId", "HolidayFlag"]], on=["Date", "SiteId"], how="left")
+# Функція для створення часових послідовностей
+def create_dataset(X, y, time_step=1):
+    Xs, ys = [], []
+    for i in range(len(X) - time_step):
+        v = X.iloc[i:(i + time_step)].values
+        Xs.append(v)
+        ys.append(y.iloc[i + time_step])
+    return np.array(Xs), np.array(ys)
 
-# Заповнення NaN значень (де немає свята → ставимо 0)
-df["HolidayFlag"] = df["HolidayFlag"].fillna(0)
+time_step = 6
+X_train_seq, y_train_seq = create_dataset(X_train, y_train, time_step)
 
-# === 6. Фільтрація за 2017 рік (або взяти частину вибірки) ===
-df = df[df["Year"] == 2017]  # Можна змінити на df.sample(frac=0.5, random_state=42)
+# Reshape X_train_seq to 2D
+X_train_seq = X_train_seq.reshape(X_train_seq.shape[0], -1)
 
-# === 7. Видалення непотрібних стовпців ===
-df.drop(columns=["Timestamp", "Date", "Year"], inplace=True)
-
-# === 8. Заповнення пропущених значень ===
-df.fillna(df.median(), inplace=True)
-
-# === 9. Розділення на навчальну та тестову вибірки ===
-X = df.drop(columns=["Value"])  # Фічі
-y = df["Value"]  # Цільова змінна (споживання)
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# === 10. Тюнінг гіперпараметрів XGBoost ===
 print("🚀 Навчання моделі XGBoost...")
 model = xgb.XGBRegressor(random_state=42)
 
+# Параметри для GridSearchCV
 param_grid = {
     'n_estimators': [100, 200, 300],
     'max_depth': [3, 6, 9],
     'learning_rate': [0.01, 0.05, 0.1],
 }
 
+# Пошук найкращих параметрів
 grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=3, scoring='neg_mean_absolute_error')
-grid_search.fit(X_train, y_train)
+grid_search.fit(X_train_seq, y_train_seq)
 print("Найкращі параметри:", grid_search.best_params_)
 
 # Використання найкращих параметрів
 best_model = grid_search.best_estimator_
 
-# === 11. Оцінка моделі ===
-y_pred = best_model.predict(X_test)
-mae = mean_absolute_error(y_test, y_pred)
+# Завантаження тестових даних
+energy_data_test = pd.read_csv('data/monthly_consumption_test.csv', sep=',')
+data_test = pd.merge(energy_data_test, building_data, on='SiteId')
+data_test = pd.merge(data_test, temperature_data, on=['SiteId', 'Month'])
+data_test = pd.merge(data_test, holidays_data, on=['SiteId', 'Month'])
+
+# Обробка тестових даних
+data_test['Timestamp'] = pd.to_datetime(data_test['Month'])
+data_test['Month'] = data_test['Timestamp'].dt.month
+data_test['Year'] = data_test['Timestamp'].dt.year
+
+data_test['value_lag1'] = data_test.groupby('SiteId')['value'].shift(1)
+data_test['value_lag2'] = data_test.groupby('SiteId')['value'].shift(2)
+data_test['value_lag3'] = data_test.groupby('SiteId')['value'].shift(3)
+data_test['value_rolling_mean'] = data_test.groupby('SiteId')['value'].rolling(window=3).mean().reset_index(level=0, drop=True)
+
+# Видалення пропущених значень
+data_test.dropna(inplace=True)
+
+# Масштабування тестових даних
+data_test[numerical_features] = scaler.transform(data_test[numerical_features])
+
+# Підготовка тестових даних
+X_test = data_test.drop(columns=["value"])
+y_test = data_test["value"]
+X_test = X_test.select_dtypes(include=['float64', 'int64'])
+
+# Створення часових послідовностей для тестових даних
+X_test_seq, y_test_seq = create_dataset(X_test, y_test, time_step)
+
+# Reshape X_test_seq to 2D
+X_test_seq = X_test_seq.reshape(X_test_seq.shape[0], -1)
+
+# Прогнозування
+y_pred = best_model.predict(X_test_seq)
+
+# Оцінка моделі
+mae = mean_absolute_error(y_test_seq, y_pred)
+mape = mean_absolute_percentage_error(y_test_seq, y_pred)
 print(f"📉 Mean Absolute Error (MAE): {mae:.2f}")
+print(f"📊 Mean Absolute Percentage Error (MAPE): {mape * 100:.2f}%")
 
-mean_value = df["Value"].mean()
-print(f"Середнє значення енерговитрат: {mean_value:.2f}")
-
-relative_error = (mae / mean_value) * 100
-print(f"Відносна похибка: {relative_error:.2f}%")
-
-# === 12. Візуалізація важливості фіч ===
-plt.figure(figsize=(10, 5))
-sns.barplot(x=best_model.feature_importances_, y=X.columns)
-plt.xlabel("Важливість фіч")
-plt.ylabel("Фічі")
-plt.title("Важливість фіч для XGBoost")
+# Візуалізація прогнозу
+plt.figure(figsize=(12, 6))
+plt.plot(y_test_seq, label="Actual", linestyle='dashed', color='blue')
+plt.plot(y_pred, label="Predicted", linestyle='dashed', color='red')
+plt.xlabel("Time Steps")
+plt.ylabel("Energy Consumption (Normalized)")
+plt.title("Actual vs. Predicted Energy Consumption")
+plt.legend()
+plt.grid(True)
 plt.show()

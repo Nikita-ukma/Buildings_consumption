@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import shap
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -41,7 +42,6 @@ data_train[numerical_features] = scaler.fit_transform(data_train[numerical_featu
 # Підготовка тренувальних даних
 X_train = data_train.drop(columns=["value"])
 y_train = data_train["value"]
-
 X_train = X_train.select_dtypes(include=['float64', 'int64'])
 
 # Функція для створення часових послідовностей
@@ -53,14 +53,14 @@ def create_dataset(X, y, time_step=1):
         ys.append(y.iloc[i + time_step])
     return np.array(Xs), np.array(ys)
 
-time_step = 6  # Використання довшої історії для прогнозу
+time_step = 6
 X_train, y_train = create_dataset(X_train, y_train, time_step)
 
-# Побудова LSTM моделі з покращеннями
+# Побудова LSTM моделі
 model = Sequential([
     LSTM(100, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]), kernel_regularizer=l2(0.01)),
     Dropout(0.3),
-    LSTM(50, return_sequences=True, kernel_regularizer=l2(0.01)),  # Додатковий шар LSTM
+    LSTM(50, return_sequences=True, kernel_regularizer=l2(0.01)),
     Dropout(0.3),
     LSTM(50, return_sequences=False, kernel_regularizer=l2(0.01)),
     Dropout(0.3),
@@ -68,7 +68,7 @@ model = Sequential([
     Dense(1)
 ])
 
-# Компіляція моделі з меншим learning rate
+# Компіляція моделі
 model.compile(optimizer='adam', loss='mean_squared_error')
 
 # Додавання EarlyStopping
@@ -96,16 +96,14 @@ data_test['value_rolling_mean'] = data_test.groupby('SiteId')['value'].rolling(w
 # Видалення пропущених значень
 data_test.dropna(inplace=True)
 
-# Масштабування тестових даних за допомогою того самого scaler
+# Масштабування тестових даних
 data_test[numerical_features] = scaler.transform(data_test[numerical_features])
 
 # Підготовка тестових даних
 X_test = data_test.drop(columns=["value"])
 y_test = data_test["value"]
-
 X_test = X_test.select_dtypes(include=['float64', 'int64'])
 
-# Перетворення тестових даних у формат, прийнятний для LSTM
 X_test, y_test = create_dataset(X_test, y_test, time_step)
 
 # Прогнозування
@@ -117,8 +115,18 @@ mape = mean_absolute_percentage_error(y_test, y_pred)
 print(f"📉 Mean Absolute Error (MAE): {mae:.2f}")
 print(f"📊 Mean Absolute Percentage Error (MAPE): {mape * 100:.2f}%")
 
-# Візуалізація результатів
+# Візуалізація втрат
 plt.plot(history.history['loss'], label='train')
 plt.plot(history.history['val_loss'], label='validation')
 plt.legend()
+plt.show()
+# Візуалізація прогнозу
+plt.figure(figsize=(12, 6))
+plt.plot(y_test, label="Actual", linestyle='dashed', color='blue')
+plt.plot(y_pred, label="Predicted", linestyle='dashed', color='red')
+plt.xlabel("Time Steps")
+plt.ylabel("Energy Consumption (Normalized)")
+plt.title("Actual vs. Predicted Energy Consumption")
+plt.legend()
+plt.grid(True)
 plt.show()
