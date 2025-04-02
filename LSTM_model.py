@@ -1,132 +1,141 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import shap
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.regularizers import l2
 from tensorflow.keras.callbacks import EarlyStopping
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
 
-# Завантаження тренувальних даних
-energy_data_train = pd.read_csv('data/monthly_consumption.csv', sep=',')
-building_data = pd.read_csv('data/power-laws-forecasting-energy-consumption-metadata.csv', sep=';')
-temperature_data = pd.read_csv('data/monthly_weather.csv', sep=',')
-holidays_data = pd.read_csv('data/monthly_holidays.csv', sep=',')
+# Завантаження даних
+data = pd.read_csv("residential_energy_normalized.csv")
 
-# Об'єднання тренувальних даних
-data_train = pd.merge(energy_data_train, building_data, on='SiteId')
-data_train = pd.merge(data_train, temperature_data, on=['SiteId', 'Month'])
-data_train = pd.merge(data_train, holidays_data, on=['SiteId', 'Month'])
+# Обробка часу
+data['Timestamp'] = pd.to_datetime(data['Timestamp'])
+data['Month'] = data['Timestamp'].dt.month
+data['DayOfWeek'] = data['Timestamp'].dt.dayofweek
+data['Hour'] = data['Timestamp'].dt.hour
 
-# Перетворення Timestamp у datetime
-data_train['Timestamp'] = pd.to_datetime(data_train['Month'])
-data_train['Month'] = data_train['Timestamp'].dt.month
-data_train['Year'] = data_train['Timestamp'].dt.year
+# Вибір ознак
+features = [
+    'Temperature (°C)', 
+    'Humidity (%)', 
+    'Occupancy Rate (%)',
+    'Energy Price ($/kWh)', 
+    'Month', 
+    'DayOfWeek', 
+    'Hour',
+    'Energy Consumption (kWh) Normalized'  # Цільова змінна
+]
 
-# Додавання нових ознак
-data_train['value_lag1'] = data_train.groupby('SiteId')['value'].shift(1)
-data_train['value_lag2'] = data_train.groupby('SiteId')['value'].shift(2)
-data_train['value_lag3'] = data_train.groupby('SiteId')['value'].shift(3)
-data_train['value_rolling_mean'] = data_train.groupby('SiteId')['value'].rolling(window=3).mean().reset_index(level=0, drop=True)
+data = data[features]
 
-# Видалення пропущених значень
-data_train.dropna(inplace=True)
-
-# Масштабування даних
+# Нормалізація даних
 scaler = MinMaxScaler()
-numerical_features = data_train.select_dtypes(include=['float64', 'int64']).columns
-data_train[numerical_features] = scaler.fit_transform(data_train[numerical_features])
+data_scaled = scaler.fit_transform(data)
 
-# Підготовка тренувальних даних
-X_train = data_train.drop(columns=["value"])
-y_train = data_train["value"]
-X_train = X_train.select_dtypes(include=['float64', 'int64'])
+# Підготовка даних для LSTM
+def create_dataset(data, look_back=24):
+    X, y = [], []
+    for i in range(len(data)-look_back-1):
+        X.append(data[i:(i+look_back), :-1])  # Всі ознаки крім останньої (цільової)
+        y.append(data[i+look_back, -1])       # Цільова змінна
+    return np.array(X), np.array(y)
 
-# Функція для створення часових послідовностей
-def create_dataset(X, y, time_step=1):
-    Xs, ys = [], []
-    for i in range(len(X) - time_step):
-        v = X.iloc[i:(i + time_step)].values
-        Xs.append(v)
-        ys.append(y.iloc[i + time_step])
-    return np.array(Xs), np.array(ys)
+look_back = 24  # Використовуємо 24 години для прогнозу
+X, y = create_dataset(data_scaled, look_back)
 
-time_step = 6
-X_train, y_train = create_dataset(X_train, y_train, time_step)
+# Розділення на тренувальний та тестовий набори
+train_size = int(len(X) * 0.8)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
 
 # Побудова LSTM моделі
 model = Sequential([
-    LSTM(100, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2]), kernel_regularizer=l2(0.01)),
-    Dropout(0.3),
-    LSTM(50, return_sequences=True, kernel_regularizer=l2(0.01)),
-    Dropout(0.3),
-    LSTM(50, return_sequences=False, kernel_regularizer=l2(0.01)),
-    Dropout(0.3),
-    Dense(50, activation='relu'),
+    LSTM(64, input_shape=(look_back, X_train.shape[2]), return_sequences=True),
+    Dropout(0.2),
+    LSTM(32, return_sequences=False),
+    Dropout(0.2),
     Dense(1)
 ])
 
-# Компіляція моделі
-model.compile(optimizer='adam', loss='mean_squared_error')
+model.compile(optimizer='adam', loss='mse')
 
-# Додавання EarlyStopping
-early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-
-# Навчання моделі
-history = model.fit(X_train, y_train, epochs=100, batch_size=32, validation_split=0.2, verbose=1, callbacks=[early_stopping])
-
-# Завантаження тестових даних
-energy_data_test = pd.read_csv('data/monthly_consumption_test.csv', sep=',')
-data_test = pd.merge(energy_data_test, building_data, on='SiteId')
-data_test = pd.merge(data_test, temperature_data, on=['SiteId', 'Month'])
-data_test = pd.merge(data_test, holidays_data, on=['SiteId', 'Month'])
-
-# Обробка тестових даних
-data_test['Timestamp'] = pd.to_datetime(data_test['Month'])
-data_test['Month'] = data_test['Timestamp'].dt.month
-data_test['Year'] = data_test['Timestamp'].dt.year
-
-data_test['value_lag1'] = data_test.groupby('SiteId')['value'].shift(1)
-data_test['value_lag2'] = data_test.groupby('SiteId')['value'].shift(2)
-data_test['value_lag3'] = data_test.groupby('SiteId')['value'].shift(3)
-data_test['value_rolling_mean'] = data_test.groupby('SiteId')['value'].rolling(window=3).mean().reset_index(level=0, drop=True)
-
-# Видалення пропущених значень
-data_test.dropna(inplace=True)
-
-# Масштабування тестових даних
-data_test[numerical_features] = scaler.transform(data_test[numerical_features])
-
-# Підготовка тестових даних
-X_test = data_test.drop(columns=["value"])
-y_test = data_test["value"]
-X_test = X_test.select_dtypes(include=['float64', 'int64'])
-
-X_test, y_test = create_dataset(X_test, y_test, time_step)
+# Навчання моделі з ранньою зупинкою
+early_stop = EarlyStopping(monitor='val_loss', patience=5)
+history = model.fit(
+    X_train, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.2,
+    callbacks=[early_stop],
+    verbose=1
+)
 
 # Прогнозування
 y_pred = model.predict(X_test)
 
+# Зворотнє масштабування прогнозів
+y_test_actual = y_test * (data['Energy Consumption (kWh) Normalized'].max() - data['Energy Consumption (kWh) Normalized'].min()) + data['Energy Consumption (kWh) Normalized'].min()
+y_pred_actual = y_pred * (data['Energy Consumption (kWh) Normalized'].max() - data['Energy Consumption (kWh) Normalized'].min()) + data['Energy Consumption (kWh) Normalized'].min()
+
 # Оцінка моделі
-mae = mean_absolute_error(y_test, y_pred)
-mape = mean_absolute_percentage_error(y_test, y_pred)
-print(f"📉 Mean Absolute Error (MAE): {mae:.2f}")
-print(f"📊 Mean Absolute Percentage Error (MAPE): {mape * 100:.2f}%")
+rmse = mean_squared_error(y_test_actual, y_pred_actual, squared=False)
+r2 = r2_score(y_test_actual, y_pred_actual)
+print(f"RMSE (LSTM): {rmse:.2f}")
+print(f"R² (LSTM): {r2:.2f}")
+
+# Візуалізація результатів
+plt.figure(figsize=(12, 6))
+plt.plot(y_test_actual, label='Реальні значення')
+plt.plot(y_pred_actual, label='Прогнозовані значення')
+plt.xlabel('Час (години)')
+plt.ylabel('Енерговитрати (кВт·г)')
+plt.legend()
+plt.title('LSTM: Прогноз vs Реальність')
+plt.show()
+
+# Створення DataFrame для агрегації
+results = pd.DataFrame({
+    'Timestamp': data['Timestamp'].iloc[-len(y_test):],  # Відповідає останнім time_steps точкам
+    'Actual': y_test_actual.flatten(),
+    'Predicted': y_pred.flatten()
+})
+
+# Прогнозування годинних витрат
+hourly_pred = model.predict(X_test)
+
+# Агрегація прогнозів за місяць
+test_data = X_test.copy()
+test_data['Actual_Hourly'] = y_test
+test_data['Predicted_Hourly'] = hourly_pred
+
+monthly_actual = test_data.groupby('Month')['Actual_Hourly'].sum()
+monthly_pred = test_data.groupby('Month')['Predicted_Hourly'].sum()
+
+# Оцінка на місячному рівні
+rmse = mean_squared_error(monthly_actual, monthly_pred, squared=False)
+r2 = r2_score(monthly_actual, monthly_pred)
+print(f"RMSE: {rmse}")
+print(f"R²: {r2}")
+
+import matplotlib.pyplot as plt
+# Прогнози vs реальні значення (після агрегації за місяць)
+plt.figure(figsize=(10, 6))
+plt.plot(monthly_actual.index, monthly_actual, label='Реальні')
+plt.plot(monthly_actual.index, monthly_pred, label='Прогноз')
+plt.xlabel('Місяць')
+plt.ylabel('Енерговитрати (кВт·г)')
+plt.legend()
+plt.title('Прогноз vs Реальність')
+plt.show()
 
 # Візуалізація втрат
-plt.plot(history.history['loss'], label='train')
-plt.plot(history.history['val_loss'], label='validation')
-plt.legend()
-plt.show()
-# Візуалізація прогнозу
 plt.figure(figsize=(12, 6))
-plt.plot(y_test, label="Actual", linestyle='dashed', color='blue')
-plt.plot(y_pred, label="Predicted", linestyle='dashed', color='red')
-plt.xlabel("Time Steps")
-plt.ylabel("Energy Consumption (Normalized)")
-plt.title("Actual vs. Predicted Energy Consumption")
+plt.plot(history.history['loss'], label='Тренувальна втрата')
+plt.plot(history.history['val_loss'], label='Валідаційна втрата')
+plt.xlabel('Епоха')
+plt.ylabel('Втрата (MSE)')
 plt.legend()
-plt.grid(True)
+plt.title('Графік втрат під час навчання')
 plt.show()
