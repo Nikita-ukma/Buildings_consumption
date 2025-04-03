@@ -46,7 +46,6 @@ data['Hour_cos'] = np.cos(2 * np.pi * data['Hour']/24)
 # 4. Додавання взаємодій
 data['Temp_Humidity'] = data['Temperature (°C)'] * data['Humidity (%)']
 data['Occupancy_Ratio'] = data['Occupancy Rate (%)'] / (data['Building Size (m²)'] + 1e-6)
-data['Energy_Intensity'] = data['Energy Consumption (kWh)'] / (data['Building Size (m²)'] + 1e-6)
 
 # 5. Вибір фіч
 features = [
@@ -65,7 +64,7 @@ features = [
     'Building Age (years)', 'Equipment Age (years)',
     
     # Взаємодії
-    'Temp_Humidity', 'Occupancy_Ratio', 'Energy_Intensity',
+    'Temp_Humidity', 'Occupancy_Ratio',
     
     # Інше
     'Demand Response Participation', 'Thermal Comfort Index',

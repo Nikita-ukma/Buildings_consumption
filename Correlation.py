@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split 
 from sklearn.metrics import mean_squared_error, r2_score
-data = pd.read_csv("residential_energy_normalized.csv")
+data = pd.read_csv(".csv")
 # Завантажуємо дані (припускаємо, що вони вже завантажені)
 data['Timestamp'] = pd.to_datetime(data['Timestamp'])
 data['Month'] = data['Timestamp'].dt.month

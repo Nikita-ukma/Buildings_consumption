@@ -49,7 +49,6 @@ data['Hour_cos'] = np.cos(2 * np.pi * data['Hour']/24)
 # 4. Add feature interactions
 data['Temp_Humidity'] = data['Temperature (°C)'] * data['Humidity (%)']
 data['Occupancy_Ratio'] = data['Occupancy Rate (%)'] / (data['Building Size (m²)'] + 1e-6)
-data['Energy_Intensity'] = data['Energy Consumption (kWh)'] / (data['Building Size (m²)'] + 1e-6)
 
 # 5. Feature selection
 features = [
@@ -68,7 +67,7 @@ features = [
     'Building Age (years)', 'Equipment Age (years)',
     
     # Interactions
-    'Temp_Humidity', 'Occupancy_Ratio', 'Energy_Intensity',
+    'Temp_Humidity', 'Occupancy_Ratio',
     
     # Other
     'Demand Response Participation', 'Thermal Comfort Index',
