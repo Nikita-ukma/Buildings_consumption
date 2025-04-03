@@ -1,103 +1,102 @@
 import pandas as pd
 import numpy as np
+import statsmodels.api as sm
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import matplotlib.pyplot as plt
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sklearn.preprocessing import StandardScaler
-from statsmodels.tsa.stattools import adfuller
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-# 🔹 Завантаження даних
-df = pd.read_csv("residential_energy_normalized.csv")
-df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-df.set_index('Timestamp', inplace=True)
+# 1. Завантаження та підготовка даних
+data = pd.read_csv("data/electricity_dataset.csv", parse_dates=['Timestamp'], index_col='Timestamp')
 
-# 🔹 Конвертація всіх колонок у числовий формат
-df = df.apply(pd.to_numeric, errors='coerce')
+# 2. Створення необхідних змінних
+data['Hour'] = data.index.hour
+data['DayOfWeek'] = data.index.dayofweek
+data['IsWeekend'] = data['DayOfWeek'].isin([5,6]).astype(int)
 
-# 🔹 Видалення об'єктних колонок (якщо залишилися)
-df_numeric = df.select_dtypes(include=[np.number])
+# Обов'язкова перевірка наявності колонок
+required_columns = ['Occupancy Rate (%)', 'Building Size (m²)', 'Temperature (°C)', 'Humidity (%)']
+for col in required_columns:
+    if col not in data.columns:
+        raise ValueError(f"Відсутня обов'язкова колонка: {col}")
 
-# 🔹 Ресемплінг **залишаємо на 12-годинному рівні**
-df_12h = df_numeric.resample('12h').mean()
+data['Occupancy_Ratio'] = data['Occupancy Rate (%)'] / (data['Building Size (m²)'] + 1e-6)
 
-# 🔹 Визначення ознак та цільової змінної
-features = [
-    "Temperature (°C)", "Humidity (%)", "Occupancy Rate (%)",
-    "Lighting Consumption (kWh)", "HVAC Consumption (kWh)",
-    "Energy Price ($/kWh)", "Carbon Emission Rate (g CO2/kWh)",
-    "Voltage Levels (V)", "Indoor Temperature (°C)", "Building Age (years)",
-    "Equipment Age (years)", "Energy Efficiency Rating", "Building Size (m²)",
-    "Window-to-Wall Ratio (%)", "Insulation Quality Score", 
-    "Historical Energy Consumption (kWh)", "Solar Irradiance (W/m²)",
-    "Smart Plug Usage (kWh)", "Water Usage (liters)"
-]
-target = "Energy Consumption (kWh) Normalized"
+# 3. Визначення exog змінних
+exog_vars = ['Temperature (°C)', 'Humidity (%)', 'Occupancy_Ratio', 'Hour', 'DayOfWeek', 'IsWeekend']
 
-# 🔹 Видалення пропущених значень
-df_12h = df_12h[[target] + features].dropna()
+# 4. Розділення на навчальну та тестову вибірки
+train_size = int(len(data) * 0.8)
+train_data = data.iloc[:train_size]
+test_data = data.iloc[train_size:]
 
-# 🔹 Масштабування ознак
-scaler = StandardScaler()
-df_12h[features] = scaler.fit_transform(df_12h[features])
-
-# 🔹 Перевірка стаціонарності
-result = adfuller(df_12h[target])
-print("ADF Statistic:", result[0])
-print("p-value:", result[1])
-
-# 🔹 Диференціювання, якщо ряд нестаціонарний
-if result[1] > 0.05:
-    df_12h[target] = df_12h[target].diff().dropna()
-    df_12h = df_12h.dropna()
-
-# 🔹 Встановлення частоти індексу (12 годин)
-df_12h = df_12h.asfreq('12h')
-
-# 🔹 Поділ на тренувальні та тестові дані (80/20)
-train_size = int(len(df_12h) * 0.8)
-train, test = df_12h.iloc[:train_size], df_12h.iloc[train_size:]
-
-# 🔹 Параметри моделі SARIMAX
-order = (1, 1, 1)  # Авторегресія, диференціювання, MA
-seasonal_order = (1, 1, 1, 14)  # Тижнева сезонність (14 точок = 7 днів по 12H)
-
-# 🔹 Побудова моделі
-model = SARIMAX(
-    train[target], 
-    exog=train[features],  
-    order=order, 
-    seasonal_order=seasonal_order,
-    enforce_stationarity=False, 
-    enforce_invertibility=False
+# 5. Побудова SARIMAX моделі з фіксованими параметрами
+print("Побудова SARIMAX моделі з параметрами (0,0,0)x(1,0,1,24)...")
+model = sm.tsa.SARIMAX(
+    endog=train_data['Energy Consumption (kWh)'],
+    exog=train_data[exog_vars],
+    order=(0, 0, 0),
+    seasonal_order=(1, 0, 1, 24),
+    enforce_stationarity=False,
+    enforce_invertibility=False,
+    freq='H'
 )
-model_fit = model.fit()
 
-# 🔹 Функція для **рекурсивного прогнозування** на 30 днів (~60 точок)
-def recursive_forecast(model_fit, test_exog, steps=60):
-    forecast = []
-    last_data = test_exog.iloc[:1]  # Початковий екзогенний вектор
+# 6. Оптимізоване навчання моделі
+result = model.fit(
+    method='powell',  # Ефективний метод оптимізації
+    maxiter=100,      # Збільшена кількість ітерацій
+    disp=True,
+    full_output=True
+)
 
-    for i in range(steps):
-        fc = model_fit.get_forecast(steps=1, exog=last_data).predicted_mean
-        forecast.append(fc.iloc[0])
+print(result.summary())
 
-        # Оновлюємо екзогенні змінні для наступного прогнозу
-        last_data = test_exog.iloc[i+1:i+2] if i+1 < len(test_exog) else last_data
+# 7. Прогнозування на тестовій вибірці
+print("\nГенерація прогнозів...")
+forecast = result.get_forecast(
+    steps=len(test_data),
+    exog=test_data[exog_vars]
+)
+forecast_values = forecast.predicted_mean
+conf_int = forecast.conf_int()
 
-    return pd.Series(forecast, index=test_exog.index[:steps])
+# 8. Оцінка якості моделі
+metrics = {
+    'RMSE': mean_squared_error(test_data['Energy Consumption (kWh)'], forecast_values, squared=False),
+    'MAE': mean_absolute_error(test_data['Energy Consumption (kWh)'], forecast_values),
+    'MAPE': np.mean(np.abs((test_data['Energy Consumption (kWh)'] - forecast_values) / test_data['Energy Consumption (kWh)'])) * 100
+}
 
-# 🔹 Виконання прогнозування на 60 точок (~30 днів)
-forecast_values = recursive_forecast(model_fit, test[features], steps=60)
+print("\nМетрики якості моделі:")
+for name, value in metrics.items():
+    print(f"{name}: {value:.2f}")
 
-# 🔹 Візуалізація прогнозу
-plt.figure(figsize=(12, 6))
-plt.plot(train.index[-100:], train[target].iloc[-100:], label="Тренувальні дані")
-plt.plot(test.index[:60], test[target][:60], label="Реальні значення (30 днів)")
-plt.plot(test.index[:60], forecast_values, label="Прогноз", linestyle="--")
+# 9. Візуалізація результатів
+plt.figure(figsize=(14, 7))
+plt.plot(train_data.index[-100:], train_data['Energy Consumption (kWh)'][-100:], label='Training Data')
+plt.plot(test_data.index, test_data['Energy Consumption (kWh)'], label='Actual', color='blue')
+plt.plot(test_data.index, forecast_values, label='Forecast', color='red')
+plt.fill_between(test_data.index,
+                conf_int.iloc[:, 0],
+                conf_int.iloc[:, 1],
+                color='pink', alpha=0.3, label='95% CI')
+plt.title('Energy Consumption Forecast with Optimized SARIMAX')
+plt.xlabel('Date')
+plt.ylabel('Energy Consumption (kWh)')
 plt.legend()
-plt.title("Прогноз енергоспоживання на 30 днів (SARIMAX)")
+plt.grid(True)
 plt.show()
 
-# 🔹 Оцінка якості прогнозу
-print("MAE:", mean_absolute_error(test[target][:60], forecast_values))
-print("RMSE:", np.sqrt(mean_squared_error(test[target][:60], forecast_values)))
+# 10. Діагностика залишків
+result.plot_diagnostics(figsize=(12, 8))
+plt.tight_layout()
+plt.show()
+
+# 11. Збереження результатів
+output = pd.DataFrame({
+    'Timestamp': test_data.index,
+    'Actual': test_data['Energy Consumption (kWh)'],
+    'Predicted': forecast_values,
+    'Lower CI': conf_int.iloc[:, 0],
+    'Upper CI': conf_int.iloc[:, 1]
+})
+output.to_csv('sarimax_forecast_results.csv', index=False)

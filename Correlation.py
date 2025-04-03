@@ -1,3 +1,5 @@
+# A program, which shows correlation variables to main variable (Energy Consumption (kWh) Normalized)
+
 import seaborn as sns
 import matplotlib.pyplot as plt
 

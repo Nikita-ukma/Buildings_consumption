@@ -1,95 +1,161 @@
+'''
+RESULT:
+RMSE: 20.61 kWh
+MAE: 16.47 kWh
+MAPE: 130.17%
+R²: 0.0015
+'''
 import pandas as pd
+import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 import matplotlib.pyplot as plt
 
-# Завантаження даних
-data = pd.read_csv("residential_energy_normalized.csv")
-
-# Обробка часу
+# Load data
+data = pd.read_csv("data/electricity_dataset.csv")
 data['Timestamp'] = pd.to_datetime(data['Timestamp'])
+
+# 1. Process string values
+string_features = ['Building Type', 'Occupancy Schedule', 'Building Orientation', 
+                  'Carbon Emission Reduction Category', 'Peak Demand Reduction Indicator']
+
+# Encode categorical variables
+label_encoders = {}
+for col in string_features:
+    le = LabelEncoder()
+    data[col] = le.fit_transform(data[col].astype(str))
+    label_encoders[col] = le
+
+# 2. Normalize target variable
+energy_scaler = MinMaxScaler()
+data['Energy Consumption (kWh) Normalized'] = energy_scaler.fit_transform(
+    data[['Energy Consumption (kWh)']])
+
+# 3. Add time features
 data['Month'] = data['Timestamp'].dt.month
-data['DayOfWeek'] = data['Timestamp'].dt.dayofweek
+data['DayOfWeek'] = data['Timestamp'].dt.dayofweek  
 data['Hour'] = data['Timestamp'].dt.hour
+data['IsWeekend'] = data['DayOfWeek'].isin([5,6]).astype(int)
+data['Hour_sin'] = np.sin(2 * np.pi * data['Hour']/24)
+data['Hour_cos'] = np.cos(2 * np.pi * data['Hour']/24)
 
-# Додаємо сумарні енерговитрати за місяць
-monthly_energy = data.groupby(['Building Type', 'Month'])['Energy Consumption (kWh) Normalized'].transform('sum')
-data['Monthly_Energy'] = monthly_energy
+# 4. Add feature interactions
+data['Temp_Humidity'] = data['Temperature (°C)'] * data['Humidity (%)']
+data['Occupancy_Ratio'] = data['Occupancy Rate (%)'] / (data['Building Size (m²)'] + 1e-6)
+data['Energy_Intensity'] = data['Energy Consumption (kWh)'] / (data['Building Size (m²)'] + 1e-6)
 
-# Вибір ознак
+# 5. Feature selection
 features = [
-    'Temperature (°C)',
-    'Humidity (%)',
-    'Occupancy Rate (%)',
-    'Energy Price ($/kWh)',
-    'Month',
-    'DayOfWeek',
-    'Hour',
-    'Energy Savings Potential (%)',
-    'Voltage Levels (V)',
-    'Demand Response Participation',
-    'Lighting Consumption (kWh)',
-    'Water Usage (liters)',
-    'Thermal Comfort Index',
-    'Power Factor'
+    # Basic features
+    'Temperature (°C)', 'Humidity (%)', 'Occupancy Rate (%)',
+    'Energy Price ($/kWh)', 'Power Factor', 'Voltage Levels (V)',
+    
+    # Categorical
+    'Building Type', 'Occupancy Schedule', 'Building Orientation',
+    
+    # Time-based
+    'Month', 'DayOfWeek', 'Hour', 'IsWeekend', 'Hour_sin', 'Hour_cos',
+    
+    # Technical
+    'Building Size (m²)', 'Window-to-Wall Ratio (%)', 'Insulation Quality Score',
+    'Building Age (years)', 'Equipment Age (years)',
+    
+    # Interactions
+    'Temp_Humidity', 'Occupancy_Ratio', 'Energy_Intensity',
+    
+    # Other
+    'Demand Response Participation', 'Thermal Comfort Index',
+    'Carbon Emission Reduction Category'
 ]
 
 X = data[features]
 y = data['Energy Consumption (kWh) Normalized']
 
-# Нормалізація даних
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
+# 6. Identify categorical features for proper encoding
+categorical_features = ['Building Type', 'Occupancy Schedule', 'Building Orientation', 
+                       'Carbon Emission Reduction Category']
+numerical_features = [f for f in features if f not in categorical_features]
 
-# Розділення даних
-X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
+# 7. Create preprocessing pipeline
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', 'passthrough', numerical_features),
+        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)
+    ])
 
-# Створення та навчання моделі
-model = LinearRegression()
+# 8. Split data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 9. Create and train Linear Regression model
+model = Pipeline([
+    ('preprocessor', preprocessor),
+    ('regressor', LinearRegression())
+])
+
 model.fit(X_train, y_train)
 
-# Прогнозування
-hourly_pred = model.predict(X_test)
+# 10. Predictions and denormalization
+hourly_pred_normalized = model.predict(X_test)
+hourly_pred = energy_scaler.inverse_transform(hourly_pred_normalized.reshape(-1, 1)).flatten()
+y_test_original = energy_scaler.inverse_transform(y_test.values.reshape(-1, 1)).flatten()
 
-# Агрегація за місяць
-test_data = pd.DataFrame(X_test, columns=features)
-test_data['Actual_Hourly'] = y_test.values
-test_data['Predicted_Hourly'] = hourly_pred
+# 11. Model evaluation
+rmse = mean_squared_error(y_test_original, hourly_pred, squared=False)
+mae = mean_absolute_error(y_test_original, hourly_pred)
+mape = mean_absolute_percentage_error(y_test_original, hourly_pred)
+r2 = r2_score(y_test_original, hourly_pred)
 
-monthly_actual = test_data.groupby('Month')['Actual_Hourly'].sum()
-monthly_pred = test_data.groupby('Month')['Predicted_Hourly'].sum()
+print("\n=== Model Evaluation ===")
+print(f"RMSE: {rmse:.2f} kWh")
+print(f"MAE: {mae:.2f} kWh")
+print(f"MAPE: {mape:.2%}")
+print(f"R²: {r2:.4f}")
 
-# Оцінка моделі
-rmse = mean_squared_error(monthly_actual, monthly_pred, squared=False)
-r2 = r2_score(monthly_actual, monthly_pred)
-print(f"RMSE (Linear Regression): {rmse:.6f}")
-print(f"R² (Linear Regression): {r2:.6f}")
+# 12. Aggregate by month for analysis
+test_data = X_test.copy()
+test_data['Actual'] = y_test_original
+test_data['Predicted'] = hourly_pred
+test_data['Month'] = data.loc[X_test.index, 'Month']  # Add month from original data
 
-# Важливість ознак
-coefficients = pd.DataFrame({
-    'Feature': features,
-    'Coefficient': model.coef_
-}).sort_values('Coefficient', ascending=False)
+monthly_actual = test_data.groupby('Month')['Actual'].sum()
+monthly_pred = test_data.groupby('Month')['Predicted'].sum()
 
-print("\nВажливість ознак (коефіцієнти):")
-print(coefficients)
-
-# Візуалізація
+# 13. Visualization
 plt.figure(figsize=(12, 6))
-plt.barh(coefficients['Feature'], coefficients['Coefficient'])
-plt.xlabel('Коефіцієнт')
-plt.title('Важливість ознак у Linear Regression')
+plt.plot(monthly_actual.index, monthly_actual, 'o-', label='Actual')
+plt.plot(monthly_actual.index, monthly_pred, 'x--', label='Predicted')
+plt.title('Monthly Energy Consumption: Actual vs Predicted')
+plt.xlabel('Month')
+plt.ylabel('Energy Consumption (kWh)')
+plt.legend()
+plt.grid(True)
 plt.show()
 
-# Прогнози vs реальні значення
-plt.figure(figsize=(10, 6))
-plt.plot(monthly_actual.index, monthly_actual, marker='o', label='Реальні')
-plt.plot(monthly_actual.index, monthly_pred, marker='x', label='Прогноз')
-plt.xlabel('Місяць')
-plt.ylabel('Енерговитрати (кВт·г)')
-plt.legend()
-plt.title('Linear Regression: Прогноз vs Реальність')
-plt.grid(True)
+# 14. Get feature importance (coefficients)
+# Get feature names after one-hot encoding
+feature_names = numerical_features.copy()
+ohe = model.named_steps['preprocessor'].named_transformers_['cat']
+cat_feature_names = ohe.get_feature_names_out(categorical_features)
+feature_names.extend(cat_feature_names)
+
+# Get coefficients
+coefficients = model.named_steps['regressor'].coef_
+
+# Create importance DataFrame
+importance_df = pd.DataFrame({
+    'Feature': feature_names,
+    'Coefficient': coefficients
+}).sort_values('Coefficient', key=abs, ascending=False)
+
+# Plot top 20 features
+plt.figure(figsize=(10, 8))
+plt.barh(importance_df['Feature'].head(20), importance_df['Coefficient'].head(20))
+plt.title('Top 20 Feature Coefficients (Linear Regression)')
+plt.xlabel('Coefficient Value')
+plt.ylabel('Feature')
+plt.gca().invert_yaxis()
 plt.show()

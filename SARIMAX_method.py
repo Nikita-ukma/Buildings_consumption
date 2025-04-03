@@ -1,3 +1,8 @@
+'''
+RESULT:
+'''
+
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -5,7 +10,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 
 # Завантаження обробленого датасету
-df_monthly = pd.read_csv("processed_dataset.csv", parse_dates=["Year-Month"], index_col="Year-Month")
+df_monthly = pd.read_csv("data/processed_data.csv", parse_dates=["Year-Month"], index_col="Year-Month")
 #MAPE: 0.0692, RMSE: 2145.0523
 
 # Визначаємо предиктори (всі змінні, крім цільової)

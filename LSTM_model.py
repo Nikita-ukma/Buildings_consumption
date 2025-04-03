@@ -1,141 +1,179 @@
+'''
+RESULT:
+RMSE: 20.31 kWh
+MAE: 16.15 kWh
+MAPE: 87.46%
+R²: -0.0009
+'''
+
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, r2_score
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, mean_absolute_percentage_error
+import matplotlib.pyplot as plt
 
-# Завантаження даних
-data = pd.read_csv("residential_energy_normalized.csv")
-
-# Обробка часу
+# Load and preprocess data
+data = pd.read_csv("data/electricity_dataset.csv")
 data['Timestamp'] = pd.to_datetime(data['Timestamp'])
-data['Month'] = data['Timestamp'].dt.month
-data['DayOfWeek'] = data['Timestamp'].dt.dayofweek
-data['Hour'] = data['Timestamp'].dt.hour
 
-# Вибір ознак
+# 1. Process categorical features
+cat_features = ['Building Type', 'Occupancy Schedule', 'Building Orientation', 
+               'Carbon Emission Reduction Category', 'Peak Demand Reduction Indicator']
+label_encoders = {}
+for col in cat_features:
+    le = LabelEncoder()
+    data[col] = le.fit_transform(data[col].astype(str))
+    label_encoders[col] = le
+
+# 2. Create time features
+data['Month'] = data['Timestamp'].dt.month
+data['DayOfWeek'] = data['Timestamp'].dt.dayofweek  
+data['Hour'] = data['Timestamp'].dt.hour
+data['IsWeekend'] = data['DayOfWeek'].isin([5,6]).astype(int)
+data['Hour_sin'] = np.sin(2 * np.pi * data['Hour']/24)
+data['Hour_cos'] = np.cos(2 * np.pi * data['Hour']/24)
+
+# 3. Create feature interactions
+data['Temp_Humidity'] = data['Temperature (°C)'] * data['Humidity (%)']
+data['Occupancy_Ratio'] = data['Occupancy Rate (%)'] / (data['Building Size (m²)'] + 1e-6)
+data['Energy_Intensity'] = data['Energy Consumption (kWh)'] / (data['Building Size (m²)'] + 1e-6)
+
+# 4. Define features
 features = [
-    'Temperature (°C)', 
-    'Humidity (%)', 
-    'Occupancy Rate (%)',
-    'Energy Price ($/kWh)', 
-    'Month', 
-    'DayOfWeek', 
-    'Hour',
-    'Energy Consumption (kWh) Normalized'  # Цільова змінна
+    # Basic features
+    'Temperature (°C)', 'Humidity (%)', 'Occupancy Rate (%)',
+    'Energy Price ($/kWh)', 'Power Factor', 'Voltage Levels (V)',
+    
+    # Categorical
+    'Building Type', 'Occupancy Schedule', 'Building Orientation',
+    
+    # Time-based
+    'Month', 'DayOfWeek', 'Hour', 'IsWeekend', 'Hour_sin', 'Hour_cos',
+    
+    # Technical
+    'Building Size (m²)', 'Window-to-Wall Ratio (%)', 'Insulation Quality Score',
+    'Building Age (years)', 'Equipment Age (years)',
+    
+    # Interactions
+    'Temp_Humidity', 'Occupancy_Ratio', 'Energy_Intensity',
+    
+    # Other
+    'Demand Response Participation', 'Thermal Comfort Index',
+    'Carbon Emission Reduction Category'
 ]
 
-data = data[features]
+# Verify all features exist
+missing = [f for f in features if f not in data.columns]
+if missing:
+    raise ValueError(f"Missing features: {missing}")
 
-# Нормалізація даних
+# 5. Normalize data
 scaler = MinMaxScaler()
-data_scaled = scaler.fit_transform(data)
+scaled_data = scaler.fit_transform(data[['Energy Consumption (kWh)'] + features])
 
-# Підготовка даних для LSTM
-def create_dataset(data, look_back=24):
+# 6. Create sequences
+def create_sequences(data, seq_length):
     X, y = [], []
-    for i in range(len(data)-look_back-1):
-        X.append(data[i:(i+look_back), :-1])  # Всі ознаки крім останньої (цільової)
-        y.append(data[i+look_back, -1])       # Цільова змінна
+    for i in range(len(data)-seq_length-1):
+        X.append(data[i:(i+seq_length)])
+        y.append(data[i+seq_length, 0])  # Target is energy consumption
     return np.array(X), np.array(y)
 
-look_back = 24  # Використовуємо 24 години для прогнозу
-X, y = create_dataset(data_scaled, look_back)
+SEQ_LENGTH = 24  # 24-hour sequences
+X, y = create_sequences(scaled_data, SEQ_LENGTH)
 
-# Розділення на тренувальний та тестовий набори
-train_size = int(len(X) * 0.8)
+# 7. Split data
+train_size = int(0.8 * len(X))
 X_train, X_test = X[:train_size], X[train_size:]
 y_train, y_test = y[:train_size], y[train_size:]
 
-# Побудова LSTM моделі
+# 8. Build LSTM model
 model = Sequential([
-    LSTM(64, input_shape=(look_back, X_train.shape[2]), return_sequences=True),
+    LSTM(128, input_shape=(SEQ_LENGTH, len(features)+1), 
+         return_sequences=True, recurrent_dropout=0.1),
+    BatchNormalization(),
+    LSTM(64, recurrent_dropout=0.1),
+    BatchNormalization(),
+    Dense(32, activation='relu'),
     Dropout(0.2),
-    LSTM(32, return_sequences=False),
-    Dropout(0.2),
+    Dense(16, activation='relu'),
     Dense(1)
 ])
 
-model.compile(optimizer='adam', loss='mse')
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+             loss='mse',
+             metrics=['mae'])
 
-# Навчання моделі з ранньою зупинкою
-early_stop = EarlyStopping(monitor='val_loss', patience=5)
+# 9. Train with callbacks
+callbacks = [
+    EarlyStopping(monitor='val_loss', patience=15, restore_best_weights=True),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001)
+]
+
 history = model.fit(
     X_train, y_train,
-    epochs=50,
-    batch_size=32,
+    epochs=100,
+    batch_size=64,
     validation_split=0.2,
-    callbacks=[early_stop],
+    callbacks=callbacks,
     verbose=1
 )
 
-# Прогнозування
+# 10. Predict and evaluate
 y_pred = model.predict(X_test)
 
-# Зворотнє масштабування прогнозів
-y_test_actual = y_test * (data['Energy Consumption (kWh) Normalized'].max() - data['Energy Consumption (kWh) Normalized'].min()) + data['Energy Consumption (kWh) Normalized'].min()
-y_pred_actual = y_pred * (data['Energy Consumption (kWh) Normalized'].max() - data['Energy Consumption (kWh) Normalized'].min()) + data['Energy Consumption (kWh) Normalized'].min()
+# Inverse scaling function
+def inverse_scale(scaler, data, n_features):
+    dummy = np.zeros((len(data), n_features))
+    dummy[:, 0] = data.ravel()
+    return scaler.inverse_transform(dummy)[:, 0]
 
-# Оцінка моделі
-rmse = mean_squared_error(y_test_actual, y_pred_actual, squared=False)
-r2 = r2_score(y_test_actual, y_pred_actual)
-print(f"RMSE (LSTM): {rmse:.2f}")
-print(f"R² (LSTM): {r2:.2f}")
+y_test_orig = inverse_scale(scaler, y_test, len(features)+1)
+y_pred_orig = inverse_scale(scaler, y_pred, len(features)+1)
 
-# Візуалізація результатів
-plt.figure(figsize=(12, 6))
-plt.plot(y_test_actual, label='Реальні значення')
-plt.plot(y_pred_actual, label='Прогнозовані значення')
-plt.xlabel('Час (години)')
-plt.ylabel('Енерговитрати (кВт·г)')
+# Calculate metrics
+rmse = mean_squared_error(y_test_orig, y_pred_orig, squared=False)
+mae = mean_absolute_error(y_test_orig, y_pred_orig)
+mape = mean_absolute_percentage_error(y_test_orig, y_pred_orig)
+r2 = r2_score(y_test_orig, y_pred_orig)
+
+print("\n=== LSTM Model Evaluation ===")
+print(f"RMSE: {rmse:.2f} kWh")
+print(f"MAE: {mae:.2f} kWh")
+print(f"MAPE: {mape:.2%}")
+print(f"R²: {r2:.4f}")
+
+# 11. Visualization
+plt.figure(figsize=(14, 6))
+plt.plot(y_test_orig[:500], label='Actual', linewidth=1)
+plt.plot(y_pred_orig[:500], label='Predicted', linewidth=1, alpha=0.7)
+plt.title('Energy Consumption: Actual vs LSTM Prediction (First 500 Samples)')
+plt.xlabel('Time Steps')
+plt.ylabel('Energy Consumption (kWh)')
 plt.legend()
-plt.title('LSTM: Прогноз vs Реальність')
+plt.grid(True)
 plt.show()
 
-# Створення DataFrame для агрегації
-results = pd.DataFrame({
-    'Timestamp': data['Timestamp'].iloc[-len(y_test):],  # Відповідає останнім time_steps точкам
-    'Actual': y_test_actual.flatten(),
-    'Predicted': y_pred.flatten()
-})
-
-# Прогнозування годинних витрат
-hourly_pred = model.predict(X_test)
-
-# Агрегація прогнозів за місяць
-test_data = X_test.copy()
-test_data['Actual_Hourly'] = y_test
-test_data['Predicted_Hourly'] = hourly_pred
-
-monthly_actual = test_data.groupby('Month')['Actual_Hourly'].sum()
-monthly_pred = test_data.groupby('Month')['Predicted_Hourly'].sum()
-
-# Оцінка на місячному рівні
-rmse = mean_squared_error(monthly_actual, monthly_pred, squared=False)
-r2 = r2_score(monthly_actual, monthly_pred)
-print(f"RMSE: {rmse}")
-print(f"R²: {r2}")
-
-import matplotlib.pyplot as plt
-# Прогнози vs реальні значення (після агрегації за місяць)
-plt.figure(figsize=(10, 6))
-plt.plot(monthly_actual.index, monthly_actual, label='Реальні')
-plt.plot(monthly_actual.index, monthly_pred, label='Прогноз')
-plt.xlabel('Місяць')
-plt.ylabel('Енерговитрати (кВт·г)')
+# Plot training history
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
 plt.legend()
-plt.title('Прогноз vs Реальність')
-plt.show()
 
-# Візуалізація втрат
-plt.figure(figsize=(12, 6))
-plt.plot(history.history['loss'], label='Тренувальна втрата')
-plt.plot(history.history['val_loss'], label='Валідаційна втрата')
-plt.xlabel('Епоха')
-plt.ylabel('Втрата (MSE)')
+plt.subplot(1, 2, 2)
+plt.plot(history.history['mae'], label='Training MAE')
+plt.plot(history.history['val_mae'], label='Validation MAE')
+plt.title('Model MAE')
+plt.ylabel('MAE')
+plt.xlabel('Epoch')
 plt.legend()
-plt.title('Графік втрат під час навчання')
+plt.tight_layout()
 plt.show()
