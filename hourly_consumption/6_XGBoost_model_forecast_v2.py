@@ -347,7 +347,7 @@ if __name__ == "__main__":
     try:
         # Завантаження даних
         print("Завантаження даних...")
-        df = load_and_preprocess('Data/FINAL_dataset.csv')
+        df = load_and_preprocess('data/FINAL_dataset.csv')
         
         # Розрахунок всіх ознак для всього датасету
         print("Розрахунок ознак...")
