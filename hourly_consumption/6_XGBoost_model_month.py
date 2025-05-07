@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error
 from tqdm import tqdm
 
-# === 1. Завантаження та обробка даних ===
+
 def load_and_preprocess(filepath):
     df = pd.read_csv(filepath)
     df['Datetime'] = pd.to_datetime(df['Datetime'])
@@ -19,7 +19,7 @@ def load_and_preprocess(filepath):
     df['timestamp'] = df.index
     return df
 
-# === 2. Фічі: лаги та ковзні статистики ===
+
 def add_lag_features(df, lags=[3, 6, 12, 24, 48, 168]):
     for lag in lags:
         df[f'lag_{lag}'] = df['COMED_MW'].shift(lag)
@@ -32,19 +32,19 @@ def add_rolling_features(df):
     df['rolling_std_7d'] = df['COMED_MW'].shift(1).rolling(window=168).std()
     return df
 
-# === 3. Розділення на train/test ===
+
 def split_data(df, test_start='2017-07-01'):
     train = df[df.index < test_start]
     test = df[df.index >= test_start]
     return train, test
 
-# === 4. Навчання ===
+
 def train_model(X_train, y_train):
     model = lgb.LGBMRegressor(n_estimators=500, learning_rate=0.05)
     model.fit(X_train, y_train)
     return model
 
-# === 5. Рекурсивний прогноз ===
+
 def recursive_forecast(model, last_history_df, forecast_horizon, features, lags):
     history = last_history_df.copy()
     forecasts = []
@@ -63,35 +63,35 @@ def recursive_forecast(model, last_history_df, forecast_horizon, features, lags)
             'is_weekend': int(new_time.weekday() >= 5),
         }
 
-        # Лаги
+        
         for lag in lags:
             new_row[f'lag_{lag}'] = history['COMED_MW'].iloc[-lag]
 
-        # Rolling
+        
         new_row['rolling_mean_24h'] = history['COMED_MW'].iloc[-24:].mean()
         new_row['rolling_std_24h'] = history['COMED_MW'].iloc[-24:].std()
         new_row['rolling_mean_7d'] = history['COMED_MW'].iloc[-168:].mean()
         new_row['rolling_std_7d'] = history['COMED_MW'].iloc[-168:].std()
 
-        # Температура, вологість, is_holiday можна заморозити (останні значення)
+        
         for col in ['Chicago_temp', 'Chicago_humidity', 'is_holiday']:
             new_row[col] = history[col].iloc[-1]
 
-        # DataFrame і прогноз
+        
         new_row_df = pd.DataFrame([new_row])
         y_pred = model.predict(new_row_df[features])[0]
         new_row_df['COMED_MW'] = y_pred
 
-        # Додаємо новий рядок до історії
+        
         history = pd.concat([history, new_row_df], ignore_index=True)
 
-        # Зберігаємо прогноз
+        
         forecasts.append({'timestamp': new_time, 'predicted_MW': y_pred})
 
     forecast_df = pd.DataFrame(forecasts)
     return forecast_df
 
-# === 6. Візуалізація ===
+
 def plot_forecast(original_df, forecast_df, forecast_start_time):
     plt.figure(figsize=(16, 6))
     plt.plot(original_df.index[-500:], original_df['COMED_MW'].iloc[-500:], label='Actual')
@@ -104,12 +104,12 @@ def plot_forecast(original_df, forecast_df, forecast_start_time):
     plt.grid()
     plt.show()
 def evaluate_forecast(forecast_df, actual_df):
-    # Синхронізуємо часові формати
+    
     forecast_df['timestamp'] = pd.to_datetime(forecast_df['timestamp']).dt.floor('H')
     actual_df = actual_df.copy()
     actual_df.index = pd.to_datetime(actual_df.index).floor('H')
 
-    # З'єднання
+    
     merged = forecast_df.merge(actual_df[['COMED_MW']], left_on='timestamp', right_index=True, how='inner')
     merged = merged.dropna()
 
@@ -132,7 +132,7 @@ def evaluate_forecast(forecast_df, actual_df):
 
     return merged, rmse, mae, mape
 
-# === 8. ОНОВЛЕНА ВІЗУАЛІЗАЦІЯ ===
+
 def plot_forecast_comparison(merged_df, forecast_start_time):
     plt.figure(figsize=(16, 6))
     plt.plot(merged_df['timestamp'], merged_df['COMED_MW'], label='Actual', color='blue', alpha=1)
@@ -147,20 +147,20 @@ def plot_forecast_comparison(merged_df, forecast_start_time):
     plt.show()
 
 
-# === 7. MAIN ===
+
 if __name__ == "__main__":
-    # Завантаження
+    
     df = load_and_preprocess("FINAL_dataset.csv")
 
-    # Ознаки
+    
     df = add_lag_features(df)
     df = add_rolling_features(df)
     df = df.dropna()
 
-    # Розділення
+    
     train_df, test_df = split_data(df, test_start="2017-07-01")
 
-    # Підготовка для навчання
+    
     features = [
         'hour', 'weekday', 'month', 'dayofyear', 'weekofyear', 'is_weekend',
         'is_holiday', 'Chicago_temp', 'Chicago_humidity',
@@ -172,13 +172,13 @@ if __name__ == "__main__":
     X_train = train_df[features]
     y_train = train_df['COMED_MW']
 
-    # Навчання моделі
+    
     print("🔧 Training model...")
     model = train_model(X_train, y_train)
 
-    # Рекурсивний прогноз
-    forecast_hours = 24 * 30  # місяць
-    last_window = test_df.iloc[-168:].copy()  # береться останній тиждень з тесту як старт
+    
+    forecast_hours = 24 * 30  
+    last_window = test_df.iloc[-168:].copy()  
 
     print("📈 Generating recursive forecast...")
     forecast_df = recursive_forecast(
@@ -189,12 +189,12 @@ if __name__ == "__main__":
         lags=lags
     )
 
-    # Візуалізація
+    
     forecast_start_time = last_window['timestamp'].iloc[-1]
     plot_forecast(df, forecast_df, forecast_start_time)
-     # Оцінка
+     
     merged_df, rmse, mae, mape = evaluate_forecast(forecast_df, df)
 
-    # Оновлена візуалізація
+    
     plot_forecast_comparison(merged_df, forecast_start_time)
 

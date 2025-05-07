@@ -1,12 +1,4 @@
-'''
-RMSE: 756.85 MW
-MAE: 522.73 MW
-R²: 0.8705
-Winter RMSE: 795.20 MW
-Spring RMSE: 542.75 MW
-Summer RMSE: 949.38 MW
-Fall RMSE: 680.58 MW
-'''
+
 
 import pandas as pd
 import numpy as np
@@ -16,105 +8,105 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
 
-# 1. Loading and preprocessing data
+
 def load_and_preprocess(filepath):
     df = pd.read_csv(filepath)
     df['Datetime'] = pd.to_datetime(df['Datetime'])
     df = df.set_index('Datetime').sort_index()
     
-    # Add quarter of year feature
+    
     df['quarter'] = df.index.quarter
     
-    # Add month as categorical feature
+    
     df['month'] = df.index.month
     
-    # Add summer period indicator (June-August)
+    
     df['is_summer'] = df.index.month.isin([6, 7, 8]).astype(int)
     
-    # Add day of year for seasonality
+    
     df['day_of_year'] = df.index.dayofyear
     
-    # Add hour of day as sinusoidal function to capture cyclical patterns
+    
     df['hour_sin'] = np.sin(2 * np.pi * df.index.hour / 24)
     df['hour_cos'] = np.cos(2 * np.pi * df.index.hour / 24)
     
-    # Calculate cooling degree days (CDD)
-    # Base temperature at which AC is typically turned on
-    base_temp = 21  # This value may need calibration
+    
+    
+    base_temp = 21  
     df['cooling_degree'] = df['Chicago_temp'].apply(lambda x: max(0, x - base_temp))
     
-    # Square of cooling degree to account for non-linear energy consumption at high temperatures
+    
     df['cooling_degree_squared'] = df['cooling_degree'] ** 2
     
-    # Add interaction between humidity and temperature (important for "mugginess" feeling)
+    
     df['temp_humidity_interaction'] = df['Chicago_temp'] * df['Chicago_humidity'] / 100
     
-    # Add binary feature for extreme temperatures (>30°C)
+    
     df['extreme_heat'] = (df['Chicago_temp'] > 30).astype(int)
     
-    # Add feature for AC peak usage hours (12-18 hours)
+    
     df['ac_peak_hours'] = ((df.index.hour >= 12) & (df.index.hour <= 18)).astype(int)
     
-    # Interaction between summer period and temperature
+    
     df['summer_temp_interaction'] = df['is_summer'] * df['Chicago_temp']
     
-    # Add weekday feature
+    
     df['weekday'] = df.index.dayofweek
     
-    # Add hour feature
+    
     df['hour'] = df.index.hour
     
     return df
 
-# 2. Calculate lag features WITHOUT data leakage
+
 def calculate_features(df):
-    # Create a copy for safely adding features
+    
     features_df = df.copy()
 
-    # Lag of 720 hours (30 days)
+    
     features_df['lag_720h'] = features_df['COMED_MW'].shift(720)
     
-    # Lag of previous year (8760 hours = 365 days)
+    
     features_df['lag_1y'] = features_df['COMED_MW'].shift(8760)
     
-    # Lag of two years ago (17520 hours = 730 days)
+    
     features_df['lag_2y'] = features_df['COMED_MW'].shift(17520)
     
-    # Add lags for cooling_degree
+    
     features_df['cooling_degree_lag_24h'] = features_df['cooling_degree'].shift(24)
     features_df['cooling_degree_lag_168h'] = features_df['cooling_degree'].shift(168)
     
-    # Add rolling averages for temperature
+    
     features_df['temp_rolling_24h'] = features_df['Chicago_temp'].rolling(window=24).mean().shift(1)
     features_df['temp_rolling_72h'] = features_df['Chicago_temp'].rolling(window=72).mean().shift(1)
     
-    # Add rolling maximum temperature
+    
     features_df['temp_rolling_max_24h'] = features_df['Chicago_temp'].rolling(window=24).max().shift(1)
     
-    # Add rolling temperature difference (volatile weather)
+    
     features_df['temp_volatility_24h'] = features_df['Chicago_temp'].rolling(window=24).std().shift(1)
     
     return features_df
 
-# 3. Split data into training (before 2022) and test (2022) sets
+
 def split_data(df, test_start='2022-01-01', test_end='2022-12-31'):
-    train = df.loc[:test_start].iloc[:-1]  # up to the start of 2022, not including the test day itself
-    test = df.loc[test_start:test_end]     # all of 2022
+    train = df.loc[:test_start].iloc[:-1]  
+    test = df.loc[test_start:test_end]     
     return train, test
 
-# 4. Train the model
+
 def train_model(X_train, y_train, X_val=None, y_val=None):
     params = {
         'objective': 'regression',
         'metric': 'rmse',
-        'num_leaves': 63,  # increased for better modeling of complex seasonality
-        'learning_rate': 0.03,  # decreased for better convergence
+        'num_leaves': 63,  
+        'learning_rate': 0.03,  
         'feature_fraction': 0.9,
-        'bagging_fraction': 0.8,  # added to reduce overfitting
+        'bagging_fraction': 0.8,  
         'bagging_freq': 5,
-        'reg_alpha': 0.1,  # L1 regularization
-        'reg_lambda': 0.1,  # L2 regularization
-        'min_data_in_leaf': 20  # minimum number of observations in a leaf
+        'reg_alpha': 0.1,  
+        'reg_lambda': 0.1,  
+        'min_data_in_leaf': 20  
     }
     
     train_data = lgb.Dataset(X_train, label=y_train)
@@ -124,12 +116,12 @@ def train_model(X_train, y_train, X_val=None, y_val=None):
         model = lgb.train(
             params,
             train_data,
-            num_boost_round=2000,  # increased for better convergence
+            num_boost_round=2000,  
             valid_sets=[train_data, val_data],
             callbacks=[lgb.early_stopping(stopping_rounds=50)]
         )
     else:
-        # If no validation set, use the entire training set
+        
         model = lgb.train(
             params,
             train_data,
@@ -138,7 +130,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None):
     
     return model
 
-# 5. Evaluate the model
+
 def evaluate(y_true, y_pred):
     rmse = mean_squared_error(y_true, y_pred, squared=False)
     mae = mean_absolute_error(y_true, y_pred)
@@ -148,8 +140,8 @@ def evaluate(y_true, y_pred):
     print(f"MAE: {mae:.2f} MW") 
     print(f"R²: {r2:.4f}")
     
-    # Calculate error by season
-    # Create DataFrame with sequential indices to avoid duplication
+    
+    
     errors_df = pd.DataFrame({
         'month': pd.DatetimeIndex(y_true.index).month,
         'error': np.abs(y_pred - y_true.values)
@@ -170,7 +162,7 @@ def evaluate(y_true, y_pred):
     
     return rmse, mae, r2
 
-# 6. Visualization
+
 def plot_predictions(test, y_true, y_pred):
     plt.figure(figsize=(16, 8))
     plt.plot(test.index, y_true, label='Actual', color='blue')
@@ -183,14 +175,14 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
     
-    # Additional visualization - monthly error
+    
     plt.figure(figsize=(16, 6))
     
-    # Create DataFrame without index for safe resampling
+    
     y_true_series = pd.Series(y_true, index=test.index)
     y_pred_series = pd.Series(y_pred, index=test.index)
     
-    # Resample to monthly data
+    
     monthly_actual = y_true_series.resample('M').mean()
     monthly_predicted = y_pred_series.resample('M').mean()
     monthly_error = monthly_predicted - monthly_actual
@@ -204,7 +196,7 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
     
-    # Add visualization of errors by temperature
+    
     temp_errors = pd.DataFrame({
         'Chicago_temp': test['Chicago_temp'].values,
         'Error': y_pred - y_true.values
@@ -212,10 +204,10 @@ def plot_predictions(test, y_true, y_pred):
     
     plt.figure(figsize=(14, 6))
     
-    # Create temperature bins
+    
     temp_bins = pd.cut(temp_errors['Temperature'], bins=10)
     
-    # Use boxplot with seaborn
+    
     ax = sns.boxplot(x=temp_bins, y=temp_errors['Error'])
     plt.title('Prediction Error by Temperature Range')
     plt.xlabel('Temperature Range (°C)')
@@ -225,25 +217,25 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
 
-# Main execution part
+
 if __name__ == "__main__":
     try:
-        # Load data
+        
         print("Loading data...")
         df = load_and_preprocess('FINAL_dataset.csv')
         
-        # Calculate all features for the entire dataset
+        
         print("Calculating features...")
         df_with_features = calculate_features(df)
         
-        # Split into training (before 2022) and test (2022) sets
+        
         print("Splitting data...")
         train, test = split_data(df_with_features, test_start='2017-01-01', test_end='2017-12-31')
         
-        # Remove rows with missing values
+        
         train = train.dropna()
         
-        # Define features and target variable
+        
         features = [
             'hour', 'weekday', 'quarter', 'month', 'is_summer',
             'hour_sin', 'hour_cos', 'day_of_year',
@@ -256,10 +248,10 @@ if __name__ == "__main__":
         
         target = 'COMED_MW'
         
-        # Check that the test set has all required features without NaN
+        
         print(f"Test set contains NaN: {test[features].isna().sum().sum() > 0}")
         if test[features].isna().sum().sum() > 0:
-            # Print columns with NaN values
+            
             nan_columns = test[features].columns[test[features].isna().any()].tolist()
             print(f"Columns with NaN: {nan_columns}")
             
@@ -271,10 +263,10 @@ if __name__ == "__main__":
         X_test = test[features]
         y_test = test[target]
         
-        # Train the model
+        
         print("Training the model...")
         
-        # Create validation set from the last 3 months of training data
+        
         val_start = pd.to_datetime('2016-10-01')
         X_val = X_train[X_train.index >= val_start]
         y_val = y_train[y_train.index >= val_start]
@@ -283,42 +275,42 @@ if __name__ == "__main__":
         
         model = train_model(X_train_final, y_train_final, X_val, y_val)
         
-        # Prediction
+        
         print("Making predictions...")
         y_pred = model.predict(X_test)
         
-        # Evaluation
+        
         print("\nModel performance:")
         evaluate(y_test, y_pred)
         
-        # Visualization
+        
         print("Building charts...")
         plot_predictions(test, y_test, y_pred)
         
-        # Feature importance
+        
         plt.figure(figsize=(14, 10))
         ax = lgb.plot_importance(model, importance_type='gain', figsize=(14, 10), max_num_features=20)
         plt.title('Feature Importance (top-20)')
         plt.tight_layout()
         plt.show()
         
-        # Analysis of prediction dependence on temperature
+        
         plt.figure(figsize=(14, 6))
         
-        # Create new DataFrame for analysis
+        
         temp_data = pd.DataFrame({
             'Chicago_temp': test['Chicago_temp'].values,
             'Actual': y_test.values,
             'Predicted': y_pred
         })
         
-        # Create temperature groups
+        
         temp_data['temp_group'] = pd.cut(temp_data['Chicago_temp'], bins=20)
         
-        # Group data by temperature groups
+        
         grouped = temp_data.groupby('temp_group')[['Actual', 'Predicted']].mean().reset_index()
         
-        # Convert categorical bins to strings for proper display on the chart
+        
         temp_cats = [str(x) for x in grouped['temp_group']]
         
         plt.plot(range(len(temp_cats)), grouped['Actual'], marker='o', label='Actual')

@@ -6,30 +6,30 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
 
-# 1. Завантаження та попередня обробка даних
+
 def load_and_preprocess(filepath):
     df = pd.read_csv(filepath)
     df['Datetime'] = pd.to_datetime(df['Datetime'])
     df = df.set_index('Datetime').sort_index()
     
-    # Додавання ознаки кварталу року
+    
     df['quarter'] = df.index.quarter
     
     return df
 
-# 2. Розрахунок лагів БЕЗ витоку даних
+
 def calculate_features(df):
-    # Створюємо копію для безпечного додавання ознак
+    
     features_df = df.copy()
     return features_df
 
-# 3. Розділення даних
+
 def split_data(df, test_start='2018-01-01', test_end='2018-12-31'):
-    train = df.loc[:test_start].iloc[:-1]  # до початку 2018 року, не враховуючи сам тестовий день
-    test = df.loc[test_start:test_end]     # весь 2018 рік
+    train = df.loc[:test_start].iloc[:-1]  
+    test = df.loc[test_start:test_end]     
     return train, test
 
-# 4. Навчання моделі
+
 def train_model(X_train, y_train, X_val=None, y_val=None):
     params = {
         'objective': 'regression',
@@ -51,7 +51,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None):
             callbacks=[lgb.early_stopping(stopping_rounds=50)]
         )
     else:
-        # Якщо немає валідаційного набору, використовуємо весь тренувальний
+        
         model = lgb.train(
             params,
             train_data,
@@ -60,7 +60,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None):
     
     return model
 
-# 5. Оцінка моделі
+
 def evaluate(y_true, y_pred):
     rmse = mean_squared_error(y_true, y_pred, squared=False)
     mae = mean_absolute_error(y_true, y_pred)
@@ -72,7 +72,7 @@ def evaluate(y_true, y_pred):
     
     return rmse, mae, r2
 
-# 6. Візуалізація
+
 def plot_predictions(test, y_true, y_pred):
     plt.figure(figsize=(16, 8))
     plt.plot(test.index, y_true, label='Actual', color='blue')
@@ -85,7 +85,7 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
     
-    # Додаткова візуалізація - помісячна похибка
+    
     plt.figure(figsize=(16, 6))
     monthly_errors = pd.DataFrame({
         'Actual': y_true,
@@ -103,21 +103,21 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
 
-# Основна виконавча частина
+
 if __name__ == "__main__":
-    # Завантаження даних
+    
     df = load_and_preprocess('FINAL_dataset.csv')
     
-    # Розрахунок всіх ознак для всього датасету
+    
     df_with_features = calculate_features(df)
     
-    # Розділення на тренувальний та тестовий набори
+    
     train, test = split_data(df_with_features)
     
-    # Видалення рядків з пропущеними значеннями
+    
     train = train.dropna()
     
-    # Визначення ознак та цільової змінної
+    
     features = [
         'hour', 'weekday', 'quarter', 'is_holiday', 
         'Chicago_temp', 'Chicago_humidity',
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     
     target = 'COMED_MW'
     
-    # Перевіряємо, що тестовий набір має всі потрібні ознаки без NaN
+    
     print(f"Тестовий набір містить NaN: {test[features].isna().sum().sum() > 0}")
     test = test.dropna(subset=features)
     print(f"Розмір тестового набору після видалення NaN: {test.shape}")
@@ -135,10 +135,10 @@ if __name__ == "__main__":
     X_test = test[features]
     y_test = test[target]
     
-    # Тренування моделі (можна використовувати часове розбиття для валідації)
+    
     print("Тренування моделі...")
     
-    # Створення валідаційного набору за останні 3 місяці тренувальних даних
+    
     val_start = pd.to_datetime('2017-10-01')
     X_val = X_train[X_train.index >= val_start]
     y_val = y_train[y_train.index >= val_start]
@@ -147,17 +147,17 @@ if __name__ == "__main__":
     
     model = train_model(X_train_final, y_train_final, X_val, y_val)
     
-    # Прогнозування
+    
     y_pred = model.predict(X_test)
     
-    # Оцінка
+    
     print("\nПродуктивність моделі:")
     evaluate(y_test, y_pred)
     
-    # Візуалізація
+    
     plot_predictions(test, y_test, y_pred)
     
-    # Важливість ознак
+    
     plt.figure(figsize=(12, 8))
     lgb.plot_importance(model, importance_type='gain', figsize=(12, 8))
     plt.title('Важливість ознак')

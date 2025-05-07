@@ -1,12 +1,4 @@
-'''
-RMSE: 869.60 MW
-MAE: 620.78 MW
-R²: 0.8293
-Winter RMSE: 762.27 MW
-Spring RMSE: 612.41 MW
-Summer RMSE: 1214.23 MW
-Fall RMSE: 766.06 MW
-'''
+
 
 import pandas as pd
 import numpy as np
@@ -21,93 +13,93 @@ from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
 import os
 
-# 1. Loading and preprocessing data
+
 def load_and_preprocess(filepath):
     df = pd.read_csv(filepath)
     df['Datetime'] = pd.to_datetime(df['Datetime'])
     df = df.set_index('Datetime').sort_index()
     
-    # Add quarter of year feature
+    
     df['quarter'] = df.index.quarter
     
-    # Add month as categorical feature
+    
     df['month'] = df.index.month
     
-    # Add summer period indicator (June-August)
+    
     df['is_summer'] = df.index.month.isin([6, 7, 8]).astype(int)
     
-    # Add day of year for seasonality
+    
     df['day_of_year'] = df.index.dayofyear
     
-    # Add hour of day as sinusoidal function to capture cyclical patterns
+    
     df['hour_sin'] = np.sin(2 * np.pi * df.index.hour / 24)
     df['hour_cos'] = np.cos(2 * np.pi * df.index.hour / 24)
     
-    # Calculate cooling degree days (CDD)
-    # Base temperature at which AC is typically turned on
-    base_temp = 21  # This value may need calibration
+    
+    
+    base_temp = 21  
     df['cooling_degree'] = df['Chicago_temp'].apply(lambda x: max(0, x - base_temp))
     
-    # Square of cooling degree to account for non-linear energy consumption at high temperatures
+    
     df['cooling_degree_squared'] = df['cooling_degree'] ** 2
     
-    # Add interaction between humidity and temperature (important for "mugginess" feeling)
+    
     df['temp_humidity_interaction'] = df['Chicago_temp'] * df['Chicago_humidity'] / 100
     
-    # Add binary feature for extreme temperatures (>30°C)
+    
     df['extreme_heat'] = (df['Chicago_temp'] > 30).astype(int)
     
-    # Add feature for AC peak usage hours (12-18 hours)
+    
     df['ac_peak_hours'] = ((df.index.hour >= 12) & (df.index.hour <= 18)).astype(int)
     
-    # Interaction between summer period and temperature
+    
     df['summer_temp_interaction'] = df['is_summer'] * df['Chicago_temp']
     
-    # Add weekday feature
+    
     df['weekday'] = df.index.dayofweek
     
-    # Add hour feature
+    
     df['hour'] = df.index.hour
     
     return df
 
-# 2. Calculate lag features WITHOUT data leakage
+
 def calculate_features(df):
-    # Create a copy for safely adding features
+    
     features_df = df.copy()
 
-    # Lag of 720 hours (30 days)
+    
     features_df['lag_720h'] = features_df['COMED_MW'].shift(720)
     
-    # Lag of previous year (8760 hours = 365 days)
+    
     features_df['lag_1y'] = features_df['COMED_MW'].shift(8760)
     
-    # Lag of two years ago (17520 hours = 730 days)
+    
     features_df['lag_2y'] = features_df['COMED_MW'].shift(17520)
     
-    # Add lags for cooling_degree
+    
     features_df['cooling_degree_lag_24h'] = features_df['cooling_degree'].shift(24)
     features_df['cooling_degree_lag_168h'] = features_df['cooling_degree'].shift(168)
     
-    # Add rolling averages for temperature
+    
     features_df['temp_rolling_24h'] = features_df['Chicago_temp'].rolling(window=24).mean().shift(1)
     features_df['temp_rolling_72h'] = features_df['Chicago_temp'].rolling(window=72).mean().shift(1)
     
-    # Add rolling maximum temperature
+    
     features_df['temp_rolling_max_24h'] = features_df['Chicago_temp'].rolling(window=24).max().shift(1)
     
-    # Add rolling temperature difference (volatile weather)
+    
     features_df['temp_volatility_24h'] = features_df['Chicago_temp'].rolling(window=24).std().shift(1)
     
     return features_df
 
-# 3. Split data into training (before 2017) and test (2017) sets
+
 def split_data(df, test_start='2017-01-01', test_end='2017-12-31'):
-    train = df.loc[:test_start].iloc[:-1]  # up to the start of 2017, not including the test day itself
-    test = df.loc[test_start:test_end]     # all of 2017
+    train = df.loc[:test_start].iloc[:-1]  
+    test = df.loc[test_start:test_end]     
     return train, test
 
-# Function to create time series sequences for LSTM model
+
 def create_sequences(X, y, time_steps=24):
     X_seq, y_seq = [], []
     for i in range(len(X) - time_steps):
@@ -115,23 +107,23 @@ def create_sequences(X, y, time_steps=24):
         y_seq.append(y.iloc[i+time_steps])
     return np.array(X_seq), np.array(y_seq)
 
-# 4. Train the LSTM model
+
 def train_model(X_train, y_train, X_val=None, y_val=None, time_steps=24):
-    # Standardize features
+    
     scaler_X = StandardScaler()
     scaler_y = StandardScaler()
     
     X_train_scaled = scaler_X.fit_transform(X_train)
     y_train_scaled = scaler_y.fit_transform(y_train.values.reshape(-1, 1)).flatten()
     
-    # Convert training data to sequences
+    
     X_train_seq, y_train_seq = create_sequences(
         pd.DataFrame(X_train_scaled, columns=X_train.columns, index=X_train.index),
         pd.Series(y_train_scaled, index=y_train.index),
         time_steps
     )
     
-    # Prepare validation data if provided
+    
     if X_val is not None and y_val is not None:
         X_val_scaled = scaler_X.transform(X_val)
         y_val_scaled = scaler_y.transform(y_val.values.reshape(-1, 1)).flatten()
@@ -146,7 +138,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None, time_steps=24):
     else:
         validation_data = None
     
-    # Create LSTM model
+    
     model = Sequential([
         LSTM(128, activation='tanh', return_sequences=True, 
              input_shape=(time_steps, X_train.shape[1]), recurrent_dropout=0.2),
@@ -156,19 +148,19 @@ def train_model(X_train, y_train, X_val=None, y_val=None, time_steps=24):
         Dense(1)
     ])
     
-    # Compile model
+    
     model.compile(
         optimizer=Adam(learning_rate=0.001),
         loss='mse'
     )
     
-    # Callbacks for training
+    
     callbacks = [
         EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
         ModelCheckpoint('best_lstm_model.h5', save_best_only=True, monitor='val_loss')
     ]
     
-    # Train model
+    
     history = model.fit(
         X_train_seq, y_train_seq,
         epochs=100,
@@ -180,7 +172,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None, time_steps=24):
     
     print(f"Model trained on {len(X_train_seq)} sequences")
     
-    # Plot training history
+    
     plt.figure(figsize=(10, 6))
     plt.plot(history.history['loss'], label='Training Loss')
     if validation_data:
@@ -194,7 +186,7 @@ def train_model(X_train, y_train, X_val=None, y_val=None, time_steps=24):
     
     return model, scaler_X, scaler_y, time_steps
 
-# 5. Evaluate the model
+
 def evaluate(y_true, y_pred):
     rmse = mean_squared_error(y_true, y_pred, squared=False)
     mae = mean_absolute_error(y_true, y_pred)
@@ -204,8 +196,8 @@ def evaluate(y_true, y_pred):
     print(f"MAE: {mae:.2f} MW") 
     print(f"R²: {r2:.4f}")
     
-    # Calculate error by season
-    # Create DataFrame with sequential indices to avoid duplication
+    
+    
     errors_df = pd.DataFrame({
         'month': pd.DatetimeIndex(y_true.index).month,
         'error': np.abs(y_pred - y_true.values)
@@ -226,7 +218,7 @@ def evaluate(y_true, y_pred):
     
     return rmse, mae, r2
 
-# 6. Visualization
+
 def plot_predictions(test, y_true, y_pred):
     plt.figure(figsize=(16, 8))
     plt.plot(test.index[len(test)-len(y_pred):], y_true, label='Actual', color='blue')
@@ -239,14 +231,14 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
     
-    # Additional visualization - monthly error
+    
     plt.figure(figsize=(16, 6))
     
-    # Create DataFrame without index for safe resampling
+    
     y_true_series = pd.Series(y_true, index=test.index[len(test)-len(y_pred):])
     y_pred_series = pd.Series(y_pred, index=test.index[len(test)-len(y_pred):])
     
-    # Resample to monthly data
+    
     monthly_actual = y_true_series.resample('M').mean()
     monthly_predicted = y_pred_series.resample('M').mean()
     monthly_error = monthly_predicted - monthly_actual
@@ -260,7 +252,7 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
     
-    # Add visualization of errors by temperature
+    
     temp_values = test['Chicago_temp'].values[len(test)-len(y_pred):]
     temp_errors = pd.DataFrame({
         'Chicago_temp': temp_values,
@@ -269,10 +261,10 @@ def plot_predictions(test, y_true, y_pred):
     
     plt.figure(figsize=(14, 6))
     
-    # Create temperature bins
+    
     temp_bins = pd.cut(temp_errors['Chicago_temp'], bins=10)
     
-    # Use boxplot with seaborn
+    
     ax = sns.boxplot(x=temp_bins, y=temp_errors['Error'])
     plt.title('Prediction Error by Temperature Range')
     plt.xlabel('Temperature Range (°C)')
@@ -282,76 +274,76 @@ def plot_predictions(test, y_true, y_pred):
     plt.tight_layout()
     plt.show()
 
-# LSTM doesn't natively provide feature importance, so we'll use a custom approach
+
 def plot_feature_importance(model, features, X_test_scaled, scaler_y, time_steps):
-    # We'll use a sensitivity analysis approach
+    
     feature_importance = []
     
-    # Create a baseline prediction
+    
     X_test_seq = np.array([X_test_scaled[i:i+time_steps] for i in range(len(X_test_scaled)-time_steps)])
     baseline_prediction = model.predict(X_test_seq)
     
-    # For each feature, slightly modify its values and measure impact
+    
     for i, feature in enumerate(features):
-        # Create a modified test set with this feature slightly increased
-        X_test_modified = X_test_scaled.copy()
-        X_test_modified[:, i] += 0.1  # Slightly increase this feature
         
-        # Create sequences for the modified test set
+        X_test_modified = X_test_scaled.copy()
+        X_test_modified[:, i] += 0.1  
+        
+        
         X_test_mod_seq = np.array([X_test_modified[j:j+time_steps] for j in range(len(X_test_modified)-time_steps)])
         
-        # Predict with the modified feature
+        
         modified_prediction = model.predict(X_test_mod_seq)
         
-        # Calculate the mean absolute difference in predictions
+        
         importance = np.mean(np.abs(modified_prediction - baseline_prediction))
         feature_importance.append(importance)
     
-    # Create a DataFrame for better visualization
+    
     feature_importance_df = pd.DataFrame({
         'Feature': features,
         'Importance': feature_importance
     }).sort_values('Importance', ascending=False)
     
-    # Plot feature importance
+    
     plt.figure(figsize=(14, 10))
     plt.barh(feature_importance_df['Feature'][:20], feature_importance_df['Importance'][:20])
     plt.xlabel('Sensitivity (Mean Absolute Change in Prediction)')
     plt.ylabel('Feature')
     plt.title('LSTM Feature Importance by Sensitivity Analysis (top-20)')
-    plt.gca().invert_yaxis()  # Display most important feature on top
+    plt.gca().invert_yaxis()  
     plt.tight_layout()
     plt.show()
     
     return feature_importance_df
 
-# Add a function to visualize LSTM's internal state patterns
+
 def visualize_lstm_states(model, X_test_scaled, time_steps, num_samples=5):
-    # Create a new model that outputs the LSTM states
+    
     lstm_layer_model = tf.keras.Model(
         inputs=model.input,
         outputs=model.layers[0].output
     )
     
-    # Get a few test sequences
+    
     X_test_seq = np.array([X_test_scaled[i:i+time_steps] for i in range(len(X_test_scaled)-time_steps)])
     sample_indices = np.random.randint(0, len(X_test_seq), num_samples)
     X_samples = X_test_seq[sample_indices]
     
-    # Get LSTM states for these samples
+    
     lstm_states = lstm_layer_model.predict(X_samples)
     
-    # Plot the states for visualization
+    
     plt.figure(figsize=(15, 10))
     
-    # For each sample
+    
     for i in range(num_samples):
         plt.subplot(num_samples, 1, i+1)
         
-        # Get the activations of the first 10 LSTM units over time
-        activations = lstm_states[i, :, :10]  # First 10 units
         
-        # Create a heatmap
+        activations = lstm_states[i, :, :10]  
+        
+        
         sns.heatmap(activations, cmap='viridis', 
                     xticklabels=5, yticklabels=5)
         plt.title(f'Sample {i+1}: LSTM Activations over Time')
@@ -361,29 +353,29 @@ def visualize_lstm_states(model, X_test_scaled, time_steps, num_samples=5):
     plt.tight_layout()
     plt.show()
 
-# Main execution part
+
 if __name__ == "__main__":
     try:
-        # Set seed for reproducibility
+        
         np.random.seed(42)
         tf.random.set_seed(42)
         
-        # Load data
+        
         print("Loading data...")
         df = load_and_preprocess('FINAL_dataset.csv')
         
-        # Calculate all features for the entire dataset
+        
         print("Calculating features...")
         df_with_features = calculate_features(df)
         
-        # Split into training (before 2017) and test (2017) sets
+        
         print("Splitting data...")
         train, test = split_data(df_with_features, test_start='2017-01-01', test_end='2017-12-31')
         
-        # Remove rows with missing values
+        
         train = train.dropna()
         
-        # Define features and target variable
+        
         features = [
             'hour', 'weekday', 'quarter', 'month', 'is_summer',
             'hour_sin', 'hour_cos', 'day_of_year',
@@ -396,10 +388,10 @@ if __name__ == "__main__":
         
         target = 'COMED_MW'
         
-        # Check that the test set has all required features without NaN
+        
         print(f"Test set contains NaN: {test[features].isna().sum().sum() > 0}")
         if test[features].isna().sum().sum() > 0:
-            # Print columns with NaN values
+            
             nan_columns = test[features].columns[test[features].isna().any()].tolist()
             print(f"Columns with NaN: {nan_columns}")
             
@@ -411,75 +403,75 @@ if __name__ == "__main__":
         X_test = test[features]
         y_test = test[target]
         
-        # Choose sequence length (time steps) for the LSTM model
-        time_steps = 24  # 24 hours (1 day) as a sequence
         
-        # Create validation set from the last 3 months of training data
+        time_steps = 24  
+        
+        
         val_start = pd.to_datetime('2016-10-01')
         X_val = X_train[X_train.index >= val_start]
         y_val = y_train[y_train.index >= val_start]
         X_train_final = X_train[X_train.index < val_start]
         y_train_final = y_train[y_train.index < val_start]
         
-        # Train the model
+        
         print("Training the LSTM model...")
         model, scaler_X, scaler_y, time_steps = train_model(
             X_train_final, y_train_final, X_val, y_val, time_steps=time_steps
         )
         
-        # Scale test data
+        
         X_test_scaled = scaler_X.transform(X_test)
         
-        # Create sequences for prediction
+        
         X_test_seq = np.array([X_test_scaled[i:i+time_steps] for i in range(len(X_test_scaled)-time_steps)])
         
-        # Make predictions
+        
         print("Making predictions...")
         y_pred_scaled = model.predict(X_test_seq)
         
-        # Inverse transform predictions to original scale
+        
         y_pred = scaler_y.inverse_transform(y_pred_scaled).flatten()
         
-        # Get corresponding actual values (skip the first time_steps entries)
+        
         y_true = y_test.iloc[time_steps:].values
         
-        # Evaluation
+        
         print("\nModel performance:")
         rmse, mae, r2 = evaluate(y_test.iloc[time_steps:], y_pred)
         
-        # Visualization
+        
         print("Building charts...")
         plot_predictions(test, y_true, y_pred)
         
-        # Custom feature importance for LSTM
+        
         feature_importance = plot_feature_importance(model, features, X_test_scaled, scaler_y, time_steps)
         print("\nTop 10 most important features:")
         print(feature_importance.head(10))
         
-        # Visualize LSTM internal states
+        
         print("Visualizing LSTM internal states...")
         visualize_lstm_states(model, X_test_scaled, time_steps)
         
-        # Analysis of prediction dependence on temperature
+        
         plt.figure(figsize=(14, 6))
         
-        # Get temperatures matching the prediction indices
+        
         test_temps = test['Chicago_temp'].iloc[time_steps:].values
         
-        # Create new DataFrame for analysis
+        
         temp_data = pd.DataFrame({
             'Chicago_temp': test_temps,
             'Actual': y_true,
             'Predicted': y_pred
         })
         
-        # Create temperature groups
+        
         temp_data['temp_group'] = pd.cut(temp_data['Chicago_temp'], bins=20)
         
-        # Group data by temperature groups
+        
         grouped = temp_data.groupby('temp_group')[['Actual', 'Predicted']].mean().reset_index()
         
-        # Convert categorical bins to strings for proper display on the chart
+        
         temp_cats = [str(x) for x in grouped['temp_group']]
         
         plt.plot(range(len(temp_cats)), grouped['Actual'], marker='o', label='Actual')
