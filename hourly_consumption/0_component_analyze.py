@@ -112,19 +112,6 @@ def plot_decomposition(decomposition, title_prefix):
     axes[1].set_ylabel('MW')
     axes[1].grid(True)
     
-    
-    decomposition.seasonal.plot(ax=axes[2], color='red')
-    axes[2].set_title(f'{title_prefix} - Сезонність')
-    axes[2].set_ylabel('MW')
-    axes[2].grid(True)
-    
-    
-    decomposition.resid.plot(ax=axes[3], color='purple')
-    axes[3].set_title(f'{title_prefix} - Залишки (шум)')
-    axes[3].set_ylabel('MW')
-    axes[3].grid(True)
-    
-    
     for ax in axes:
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
         ax.tick_params(axis='x', rotation=45)
