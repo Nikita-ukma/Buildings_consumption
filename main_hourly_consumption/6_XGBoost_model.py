@@ -195,10 +195,6 @@ def run_experiment(train_df, val_df, test_df, feature_cols, target_col, scenario
         "predictions": y_test_pred
     }
 
-
-# =========================================================
-# 5. Основний блок
-# =========================================================
 if __name__ == "__main__":
     BASE_DIR = os.path.dirname(__file__)
     filepath = os.path.join(BASE_DIR, "data", "FINAL_dataset.csv")
@@ -211,7 +207,6 @@ if __name__ == "__main__":
 
     train_df, val_df, test_df = split_data(df, test_start="2017-01-01", val_days=30)
 
-    # Базові календарно-погодні ознаки
     base_features = [
         "hour",
         "weekday",
@@ -224,10 +219,8 @@ if __name__ == "__main__":
         "Chicago_wind_speed",
     ]
 
-    # Всі лаги
     all_lag_features = [f"lag_{l}" for l in lag_features]
 
-    # Rolling ознаки
     rolling_features = [
         "rolling_mean_3",
         "rolling_mean_6",
@@ -235,28 +228,18 @@ if __name__ == "__main__":
         "rolling_min_12"
     ]
 
-    # -----------------------------------------------------
     # Сценарій 1: з усіма lag/rolling ознаками
-    # -----------------------------------------------------
     features_full = base_features + all_lag_features + rolling_features
 
-    # -----------------------------------------------------
     # Сценарій 2: без lag_1
-    # -----------------------------------------------------
     features_without_lag1 = (
         base_features +
         [f for f in all_lag_features if f != "lag_1"] +
         rolling_features
     )
 
-    # -----------------------------------------------------
-    # Сценарій 3: без усіх lag/rolling ознак
-    # -----------------------------------------------------
     features_no_lags = base_features.copy()
 
-    # -----------------------------------------------------
-    # Запуск експериментів
-    # -----------------------------------------------------
     results = []
 
     results.append(
@@ -286,9 +269,6 @@ if __name__ == "__main__":
         )
     )
 
-    # -----------------------------------------------------
-    # Порівняльна таблиця
-    # -----------------------------------------------------
     results_df = pd.DataFrame([
         {
             "scenario": r["scenario"],
@@ -305,20 +285,11 @@ if __name__ == "__main__":
     print("="*90)
     print(results_df.sort_values("RMSE").to_string(index=False))
 
-    # -----------------------------------------------------
-    # Графік порівняння
-    # -----------------------------------------------------
     plot_comparison(results_df)
 
-    # -----------------------------------------------------
-    # За бажанням: показати feature importance окремо
-    # -----------------------------------------------------
     for r in results:
         plot_feature_importance(r["model"], f"Feature Importance - {r['scenario']}")
 
-    # -----------------------------------------------------
-    # За бажанням: зберегти результати
-    # -----------------------------------------------------
     results_dir = os.path.join(BASE_DIR, "results")
     os.makedirs(results_dir, exist_ok=True)
 
@@ -327,9 +298,6 @@ if __name__ == "__main__":
 
     print(f"\nComparison table saved to: {results_csv_path}")
 
-    # -----------------------------------------------------
-    # Збереження моделей
-    # -----------------------------------------------------
     for i, r in enumerate(results, start=1):
         safe_name = r["scenario"].replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "")
         model_path = os.path.join(results_dir, f"{i}_{safe_name}.pkl")
