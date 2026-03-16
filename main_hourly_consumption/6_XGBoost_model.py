@@ -7,10 +7,6 @@ import matplotlib.pyplot as plt
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-
-# =========================================================
-# 1. Завантаження та підготовка даних
-# =========================================================
 def load_and_preprocess(filepath):
     df = pd.read_csv(filepath)
     df["Datetime"] = pd.to_datetime(df["Datetime"])
@@ -59,10 +55,6 @@ def split_data(df, test_start="2017-01-01", val_days=30):
 
     return train_df, val_df, test_df
 
-
-# =========================================================
-# 2. Навчання моделі
-# =========================================================
 def train_model(X_train, y_train, X_val, y_val):
     params = {
         "objective": "regression",
@@ -96,10 +88,6 @@ def train_model(X_train, y_train, X_val, y_val):
     )
     return model
 
-
-# =========================================================
-# 3. Метрики та графіки
-# =========================================================
 def evaluate(y_true, y_pred):
     mse = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
@@ -146,10 +134,6 @@ def plot_comparison(results_df):
     plt.tight_layout()
     plt.show()
 
-
-# =========================================================
-# 4. Запуск одного сценарію
-# =========================================================
 def run_experiment(train_df, val_df, test_df, feature_cols, target_col, scenario_name, show_plots=False):
     X_train = train_df[feature_cols]
     y_train = train_df[target_col]
